@@ -20,9 +20,19 @@ type engine struct {
 	redisson.Cmdable
 }
 
+// New 创建 Engine
+func New(cc redisson.ConfInterface) (Engine, error) {
+	var err error
+	e := &engine{cc: cc, Cmdable: redisson.MustNewClient(cc)}
+	e.Cmdable, err = redisson.Connect(cc)
+	return e, err
+}
+
 // MustNew 创建 Engine
 func MustNew(cc redisson.ConfInterface) Engine {
-	return &engine{cc: cc, Cmdable: redisson.MustNewClient(cc)}
+	e, err := New(cc)
+	xpanic.WhenError(err)
+	return e
 }
 
 // Delete 删除
