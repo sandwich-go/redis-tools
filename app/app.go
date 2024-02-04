@@ -81,5 +81,5 @@ func (e *engine) Clear(ctx context.Context, pattern string, count int64) error {
 			break
 		}
 	}
-	return nil
+	return err
 }
