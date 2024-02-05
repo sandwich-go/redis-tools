@@ -37,7 +37,7 @@ func MustNew(cc redisson.ConfInterface) Engine {
 
 // Delete 删除
 func (e *engine) Delete(ctx context.Context, keys ...string) error {
-	if !e.cc.GetCluster() {
+	if !e.IsCluster() {
 		return e.Cmdable.Del(ctx, keys...).Err()
 	}
 	var err xerror.Array

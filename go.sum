@@ -177,8 +177,8 @@ github.com/sandwich-go/boost v1.3.11 h1:EUg5yuFXSXaylAwhlqOiZ5ERamAeucv1RWJLIgJn
 github.com/sandwich-go/boost v1.3.11/go.mod h1:4A8tolVlDxAClIyCroU+341uIsVurSQyfrc/AP2kiXQ=
 github.com/sandwich-go/funnel v0.0.1 h1:iAQQv2NhsqK6pmb+k81h14qSrE1VazR3DZ8BqxUyP/8=
 github.com/sandwich-go/funnel v0.0.1/go.mod h1:i+Ic0l78rwAqFV2CxdrK9FZNk2JU73jamUFfk/wogGM=
-github.com/sandwich-go/redisson v1.1.39 h1:CSx9SwlKH+Msi7gHo6AwH5mWszmFZf7DUKby0Lv/wi8=
-github.com/sandwich-go/redisson v1.1.39/go.mod h1:nMfp3sD/SqUjKH0qYZMfJ0MqRcY7qUD2ZZJtcvFFfo4=
+github.com/sandwich-go/redisson v1.1.40 h1:ovRo0salIfJUCviV2drEaqKByFeQjnwM1MhthCGgFbs=
+github.com/sandwich-go/redisson v1.1.40/go.mod h1:nMfp3sD/SqUjKH0qYZMfJ0MqRcY7qUD2ZZJtcvFFfo4=
 github.com/sandwich-go/xconf v0.3.23 h1:sNFPJBBE/+EKee8spy/1WqVkqwC1oNnh6lEd47fglCo=
 github.com/sandwich-go/xconf v0.3.23/go.mod h1:iKf+mP7W/51lFN1CJFiLDoFCLJVCnLJV5vBq+CuOm1U=
 github.com/sirupsen/logrus v1.2.0/go.mod h1:LxeOpSwHxABJmUn/MG1IvRgCAasNZTLOkJPxbbu5VWo=
