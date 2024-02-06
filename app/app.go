@@ -23,6 +23,7 @@ type engine struct {
 // New 创建 Engine
 func New(cc redisson.ConfInterface) (Engine, error) {
 	var err error
+	cc.ApplyOption(redisson.WithDevelopment(false))
 	e := &engine{cc: cc, Cmdable: redisson.MustNewClient(cc)}
 	e.Cmdable, err = redisson.Connect(cc)
 	return e, err
@@ -35,13 +36,13 @@ func MustNew(cc redisson.ConfInterface) Engine {
 	return e
 }
 
-// Delete 删除
-func (e *engine) Delete(ctx context.Context, keys ...string) error {
+// delete 删除
+func (e *engine) delete(ctx context.Context, cmdable redisson.Cmdable, keys ...string) error {
 	if !e.IsCluster() {
-		return e.Cmdable.Del(ctx, keys...).Err()
+		return cmdable.Del(ctx, keys...).Err()
 	}
 	var err xerror.Array
-	batch := e.Cmdable.Pipeline()
+	batch := cmdable.Pipeline()
 	for _, key := range keys {
 		err0 := batch.Put(ctx, redisson.CommandDel, []string{key})
 		if err0 != nil {
@@ -55,21 +56,19 @@ func (e *engine) Delete(ctx context.Context, keys ...string) error {
 	return err.Err()
 }
 
-// Clear 清理
-func (e *engine) Clear(ctx context.Context, pattern string, count int64) error {
-	xpanic.WhenTrue(len(pattern) == 0, "pattern is empty")
-	xpanic.WhenTrue(count <= 0, "count is invalid, need > 0")
+// clear 清理
+func (e *engine) clear(ctx context.Context, cmdable redisson.Cmdable, pattern string, count int64) error {
 	var err error
 	var cursor uint64
 	var total int64
 	for {
 		var keys []string
-		keys, cursor, err = e.Cmdable.Scan(ctx, cursor, pattern, count).Result()
+		keys, cursor, err = cmdable.Scan(ctx, cursor, pattern, count).Result()
 		if err != nil {
 			break
 		}
 		if len(keys) > 0 {
-			err = e.Delete(ctx, keys...)
+			err = e.delete(ctx, cmdable, keys...)
 			if err != nil {
 				break
 			}
@@ -82,4 +81,16 @@ func (e *engine) Clear(ctx context.Context, pattern string, count int64) error {
 		}
 	}
 	return err
+}
+
+// Clear 清理
+func (e *engine) Clear(ctx context.Context, pattern string, count int64) error {
+	xpanic.WhenTrue(len(pattern) == 0, "pattern is empty")
+	xpanic.WhenTrue(count <= 0, "count is invalid, need > 0")
+	if e.IsCluster() {
+		return e.Cmdable.ForEachNodes(ctx, func(_ctx context.Context, _cmdable redisson.Cmdable) error {
+			return e.clear(_ctx, _cmdable, pattern, count)
+		})
+	}
+	return e.clear(ctx, e.Cmdable, pattern, count)
 }
