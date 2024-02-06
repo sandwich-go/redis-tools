@@ -1,4 +1,4 @@
-resp: RESP3                                       # 使用 RESP3 协议，Redis 使用更高效
+resp: RESP2                                       # 使用 RESP3 协议，Redis 使用更高效
 cluster: true                                    # Redis 是否是集群模式
 addrs:                                            # Redis 地址
   - 127.0.0.1:6381
