@@ -42,7 +42,7 @@ require (
 
 require (
 	github.com/fsnotify/fsnotify v1.5.1 // indirect
-	github.com/sandwich-go/redisson v1.1.43
+	github.com/sandwich-go/redisson v1.1.44
 	golang.org/x/sys v0.15.0 // indirect
 )
 
