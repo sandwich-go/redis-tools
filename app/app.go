@@ -6,6 +6,7 @@ import (
 	"github.com/sandwich-go/boost/xerror"
 	"github.com/sandwich-go/boost/xpanic"
 	"github.com/sandwich-go/redisson"
+	"strings"
 )
 
 type Engine interface {
@@ -42,38 +43,61 @@ func MustNew(cc redisson.ConfInterface) Engine {
 }
 
 // delete 删除
-func (e *engine) delete(ctx context.Context, cmdable redisson.Cmdable, keys ...string) error {
+func (e *engine) delete(ctx context.Context, cmdable, nodeCmdable redisson.Cmdable, keys ...string) error {
 	if !e.IsCluster() {
-		return cmdable.Del(ctx, keys...).Err()
+		return nodeCmdable.Del(ctx, keys...).Err()
 	}
+	var moveKey []string
 	var err xerror.Array
-	batch := cmdable.Pipeline()
+	batch := nodeCmdable.Pipeline()
 	for _, key := range keys {
 		err0 := batch.Put(ctx, redisson.CommandDel, []string{key})
 		if err0 != nil {
-			err.Push(err0)
+			if strings.Contains(err0.Error(), "MOVE") {
+				moveKey = append(moveKey, key)
+			} else {
+				err.Push(err0)
+			}
 		}
 	}
 	_, err0 := batch.Exec(ctx)
 	if err0 != nil {
 		err.Push(err0)
 	}
-	return err.Err()
+	if err1 := err.Err(); err1 != nil {
+		return err1
+	}
+	if len(moveKey) > 0 {
+		log.Warn().Strs("moveKey", moveKey).Msg("have move keys...")
+		batch = cmdable.Pipeline()
+		for _, key := range moveKey {
+			err0 = batch.Put(ctx, redisson.CommandDel, []string{key})
+			if err0 != nil {
+				err.Push(err0)
+			}
+		}
+		_, err0 = batch.Exec(ctx)
+		if err0 != nil {
+			err.Push(err0)
+		}
+		return err.Err()
+	}
+	return nil
 }
 
 // clear 清理
-func (e *engine) clear(ctx context.Context, cmdable redisson.Cmdable, pattern string, count int64) error {
+func (e *engine) clear(ctx context.Context, cmdable, nodeCmdable redisson.Cmdable, pattern string, count int64) error {
 	var err error
 	var cursor uint64
 	var total int64
 	for {
 		var keys []string
-		keys, cursor, err = cmdable.Scan(ctx, cursor, pattern, count).Result()
+		keys, cursor, err = nodeCmdable.Scan(ctx, cursor, pattern, count).Result()
 		if err != nil {
 			break
 		}
 		if len(keys) > 0 {
-			err = e.delete(ctx, cmdable, keys...)
+			err = e.delete(ctx, cmdable, nodeCmdable, keys...)
 			if err != nil {
 				break
 			}
@@ -94,8 +118,8 @@ func (e *engine) Clear(ctx context.Context, pattern string, count int64) error {
 	xpanic.WhenTrue(count <= 0, "count is invalid, need > 0")
 	if e.IsCluster() {
 		return e.Cmdable.ForEachNodes(ctx, func(_ctx context.Context, _cmdable redisson.Cmdable) error {
-			return e.clear(_ctx, _cmdable, pattern, count)
+			return e.clear(_ctx, e.Cmdable, _cmdable, pattern, count)
 		})
 	}
-	return e.clear(ctx, e.Cmdable, pattern, count)
+	return e.clear(ctx, e.Cmdable, e.Cmdable, pattern, count)
 }
