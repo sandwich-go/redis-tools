@@ -24,8 +24,13 @@ type engine struct {
 func New(cc redisson.ConfInterface) (Engine, error) {
 	var err error
 	cc.ApplyOption(redisson.WithDevelopment(false))
-	e := &engine{cc: cc, Cmdable: redisson.MustNewClient(cc)}
+	e := &engine{cc: cc}
 	e.Cmdable, err = redisson.Connect(cc)
+	if err == nil {
+		log.Info().Any("config", e.Cmdable.Options().(*redisson.Conf)).Msg("connect redis")
+	} else {
+		log.Error().Any("config", cc.(*redisson.Conf)).Err(err).Msg("connect redis")
+	}
 	return e, err
 }
 
