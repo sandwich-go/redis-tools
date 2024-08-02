@@ -47,6 +47,16 @@ func (e *engine) delete(ctx context.Context, cmdable, nodeCmdable redisson.Cmdab
 	if !e.IsCluster() {
 		return nodeCmdable.Del(ctx, keys...).Err()
 	}
+	// 先尝试
+	batch := cmdable.Pipeline()
+	for _, key := range keys {
+		redisson.CommandDel.P(batch).Cmd(key)
+	}
+	_, err0 := batch.Exec(ctx)
+	if err0 == nil {
+		return nil
+	}
+
 	var moveKey []string
 	var err xerror.Array
 	for _, key := range keys {
@@ -64,7 +74,7 @@ func (e *engine) delete(ctx context.Context, cmdable, nodeCmdable redisson.Cmdab
 	}
 	if len(moveKey) > 0 {
 		log.Warn().Strs("moveKey", moveKey).Msg("have move keys...")
-		batch := cmdable.Pipeline()
+		batch = cmdable.Pipeline()
 		for _, key := range moveKey {
 			redisson.CommandDel.P(batch).Cmd(key)
 		}
