@@ -49,9 +49,8 @@ func (e *engine) delete(ctx context.Context, cmdable, nodeCmdable redisson.Cmdab
 	}
 	var moveKey []string
 	var err xerror.Array
-	batch := nodeCmdable.Pipeline()
 	for _, key := range keys {
-		err0 := batch.Put(ctx, redisson.CommandDel, []string{key})
+		err0 := nodeCmdable.Del(ctx, key).Err()
 		if err0 != nil {
 			if strings.Contains(err0.Error(), "MOVE") {
 				moveKey = append(moveKey, key)
@@ -60,23 +59,16 @@ func (e *engine) delete(ctx context.Context, cmdable, nodeCmdable redisson.Cmdab
 			}
 		}
 	}
-	_, err0 := batch.Exec(ctx)
-	if err0 != nil {
-		err.Push(err0)
-	}
 	if err1 := err.Err(); err1 != nil {
 		return err1
 	}
 	if len(moveKey) > 0 {
 		log.Warn().Strs("moveKey", moveKey).Msg("have move keys...")
-		batch = cmdable.Pipeline()
+		batch := cmdable.Pipeline()
 		for _, key := range moveKey {
-			err0 = batch.Put(ctx, redisson.CommandDel, []string{key})
-			if err0 != nil {
-				err.Push(err0)
-			}
+			redisson.CommandDel.P(batch).Cmd(key)
 		}
-		_, err0 = batch.Exec(ctx)
+		_, err0 := batch.Exec(ctx)
 		if err0 != nil {
 			err.Push(err0)
 		}

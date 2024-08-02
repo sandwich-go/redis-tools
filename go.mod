@@ -16,8 +16,6 @@ require (
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/cespare/xxhash/v2 v2.2.0 // indirect
 	github.com/coreos/go-semver v0.3.1 // indirect
-	github.com/dgryski/go-rendezvous v0.0.0-20200823014737-9f7001d12a5f // indirect
-	github.com/go-redis/redis/v8 v8.11.5 // indirect
 	github.com/golang/protobuf v1.5.3 // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
 	github.com/mattn/go-colorable v0.1.13 // indirect
@@ -30,7 +28,8 @@ require (
 	github.com/prometheus/client_model v0.2.0 // indirect
 	github.com/prometheus/common v0.26.0 // indirect
 	github.com/prometheus/procfs v0.6.0 // indirect
-	github.com/redis/rueidis v1.0.28 // indirect
+	github.com/redis/rueidis v1.0.41 // indirect
+	github.com/redis/rueidis/rueidiscompat v1.0.41 // indirect
 	github.com/rivo/uniseg v0.2.0 // indirect
 	github.com/sandwich-go/funnel v0.0.1 // indirect
 	github.com/spf13/pflag v1.0.5 // indirect
@@ -41,9 +40,8 @@ require (
 )
 
 require (
-	github.com/fsnotify/fsnotify v1.5.1 // indirect
-	github.com/sandwich-go/redisson v1.1.46
-	golang.org/x/sys v0.15.0 // indirect
+	github.com/sandwich-go/redisson v1.2.12
+	golang.org/x/sys v0.19.0 // indirect
 )
 
 //replace github.com/sandwich-go/redisson => ../redisson
