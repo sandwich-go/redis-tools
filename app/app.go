@@ -104,10 +104,10 @@ func (e *engine) clear(ctx context.Context, cmdable, nodeCmdable redisson.Cmdabl
 				break
 			}
 			total += int64(len(keys))
-			log.Info().Int("count", len(keys)).Msg("clear keys...")
+			log.Info().Int("count", len(keys)).Strs("addr", e.cc.GetAddrs()).Msg("clear keys...")
 		}
 		if cursor == 0 {
-			log.Info().Int64("total", total).Msg("clear keys completed")
+			log.Info().Int64("total", total).Strs("addr", e.cc.GetAddrs()).Msg("clear keys completed")
 			break
 		}
 	}
