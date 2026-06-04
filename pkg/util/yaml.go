@@ -8,9 +8,10 @@ import (
 )
 
 func MustInitialize(valPtr interface{}, files ...string) {
-	x := xconf.New(xconf.WithFiles(files...))
+	// 仅从配置文件加载，传空 FlagArgs 禁用 xconf 对 os.Args 的解析，
+	// 避免与 cobra 的命令行 flag（--pattern/--count/--db/--all）冲突
+	x := xconf.New(xconf.WithFiles(files...), xconf.WithFlagArgs())
 	xpanic.WhenError(x.Parse(valPtr))
-	x.Usage()
 }
 
 func PrintYamlConfig(v interface{}, enablePrint bool) {

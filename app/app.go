@@ -2,30 +2,37 @@ package app
 
 import (
 	"context"
+	"fmt"
 	"github.com/rs/zerolog/log"
 	"github.com/sandwich-go/boost/xerror"
 	"github.com/sandwich-go/boost/xpanic"
 	"github.com/sandwich-go/redisson"
+	"strconv"
 	"strings"
 )
 
+// ClearAllDB 表示清理所有 db
+const ClearAllDB = -1
+
 type Engine interface {
 	// Clear 清理
+	// db 指定清理的 db，传入 ClearAllDB(-1) 表示清理所有 db；集群模式下该参数被忽略
 	// pattern 匹配模式
 	// count 单次扫描匹配返回的最大元素数量
-	Clear(ctx context.Context, pattern string, count int64) error
+	Clear(ctx context.Context, db int, pattern string, count int64) error
 }
 
 type engine struct {
 	cc redisson.ConfInterface
 	redisson.Cmdable
+	db int // 主连接绑定的 db（配置 db），用于判断能否复用主连接
 }
 
 // New 创建 Engine
 func New(cc redisson.ConfInterface) (Engine, error) {
 	var err error
 	cc.ApplyOption(redisson.WithDevelopment(false))
-	e := &engine{cc: cc}
+	e := &engine{cc: cc, db: cc.GetDB()}
 	e.Cmdable, err = redisson.Connect(cc)
 	if err == nil {
 		log.Info().Any("config", e.Cmdable.Options().(*redisson.Conf)).Msg("connect redis")
@@ -114,14 +121,72 @@ func (e *engine) clear(ctx context.Context, cmdable, nodeCmdable redisson.Cmdabl
 	return err
 }
 
+// databaseCount 获取实例配置的 db 总数
+func (e *engine) databaseCount(ctx context.Context) (int, error) {
+	res, err := e.ConfigGet(ctx, "databases").Result()
+	if err != nil {
+		return 0, err
+	}
+	v, ok := res["databases"]
+	if !ok {
+		return 0, fmt.Errorf("config databases not found")
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil {
+		return 0, fmt.Errorf("parse databases count %q: %w", v, err)
+	}
+	return n, nil
+}
+
+// clearOnDB 在指定 db 上清理
+// redisson 在连接时绑定 db，运行时无法 SELECT，故为目标 db 单独建立连接
+func (e *engine) clearOnDB(ctx context.Context, db int, pattern string, count int64) error {
+	// 目标 db 即主连接所在 db，复用主连接，与未指定 db 时行为完全一致
+	if db == e.db {
+		log.Info().Int("db", db).Strs("addr", e.cc.GetAddrs()).Msg("start clear db")
+		return e.clear(ctx, e.Cmdable, e.Cmdable, pattern, count)
+	}
+	e.cc.ApplyOption(redisson.WithDB(db))
+	c, err := redisson.Connect(e.cc)
+	if err != nil {
+		log.Error().Int("db", db).Strs("addr", e.cc.GetAddrs()).Err(err).Msg("connect redis failed")
+		return err
+	}
+	defer func() { _ = c.Close() }()
+	log.Info().Int("db", db).Strs("addr", e.cc.GetAddrs()).Msg("start clear db")
+	return e.clear(ctx, c, c, pattern, count)
+}
+
 // Clear 清理
-func (e *engine) Clear(ctx context.Context, pattern string, count int64) error {
+func (e *engine) Clear(ctx context.Context, db int, pattern string, count int64) error {
 	xpanic.WhenTrue(len(pattern) == 0, "pattern is empty")
 	xpanic.WhenTrue(count <= 0, "count is invalid, need > 0")
 	if e.IsCluster() {
+		if db > 0 {
+			log.Warn().Int("db", db).Msg("cluster mode only supports db 0, ignore db flag")
+		}
 		return e.Cmdable.ForEachNodes(ctx, func(_ctx context.Context, _cmdable redisson.Cmdable) error {
 			return e.clear(_ctx, e.Cmdable, _cmdable, pattern, count)
 		})
 	}
-	return e.clear(ctx, e.Cmdable, e.Cmdable, pattern, count)
+	var dbs []int
+	if db == ClearAllDB {
+		n, err := e.databaseCount(ctx)
+		if err != nil {
+			return err
+		}
+		for i := 0; i < n; i++ {
+			dbs = append(dbs, i)
+		}
+		log.Info().Int("databases", n).Msg("clear all db")
+	} else {
+		dbs = []int{db}
+	}
+	var errs xerror.Array
+	for _, d := range dbs {
+		if err := e.clearOnDB(ctx, d, pattern, count); err != nil {
+			errs.Push(err)
+		}
+	}
+	return errs.Err()
 }
