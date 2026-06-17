@@ -3,12 +3,13 @@ package app
 import (
 	"context"
 	"fmt"
+	"strconv"
+	"strings"
+
 	"github.com/rs/zerolog/log"
 	"github.com/sandwich-go/boost/xerror"
 	"github.com/sandwich-go/boost/xpanic"
 	"github.com/sandwich-go/redisson"
-	"strconv"
-	"strings"
 )
 
 // ClearAllDB 表示清理所有 db
@@ -170,10 +171,11 @@ func (e *engine) Clear(ctx context.Context, db int, pattern string, count int64)
 		})
 	}
 	var dbs []int
-	if db == ClearAllDB {
+	if db == ClearAllDB && !e.Cmdable.IsCluster() {
 		n, err := e.databaseCount(ctx)
 		if err != nil {
-			return err
+			n = 16 // 默认 16 个 db
+			log.Warn().Err(err).Msg("get database count failed, use default 16")
 		}
 		for i := 0; i < n; i++ {
 			dbs = append(dbs, i)
