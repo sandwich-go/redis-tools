@@ -39,7 +39,7 @@ var (
 )
 
 func InitCommand(parent *cobra.Command) {
-	rootCmd.Flags().StringVar(&pattern, "pattern", "user*", "scan cursor pattern, like '_k_:*'")
+	rootCmd.Flags().StringVar(&pattern, "pattern", "user*", "scan cursor pattern, like '_k_:*'; empty or '*' means clear all keys in scope")
 	rootCmd.Flags().Int64Var(&count, "count", 100, "scan cursor count")
 	rootCmd.Flags().IntVar(&db, "db", 0, "redis db to clear (default to config db when omitted); ignored in cluster mode")
 	rootCmd.Flags().BoolVar(&all, "all", false, "clear all db (ignored in cluster mode)")

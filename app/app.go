@@ -18,8 +18,8 @@ const ClearAllDB = -1
 type Engine interface {
 	// Clear 清理
 	// db 指定清理的 db，传入 ClearAllDB(-1) 表示清理所有 db；集群模式下该参数被忽略
-	// pattern 匹配模式
-	// count 单次扫描匹配返回的最大元素数量
+	// pattern 匹配模式；空串或 * 表示清理当前作用域内所有 key
+	// count 单次扫描匹配返回的最大元素数量，pattern 为全量清理时不使用
 	Clear(ctx context.Context, db int, pattern string, count int64) error
 }
 
@@ -122,6 +122,32 @@ func (e *engine) clear(ctx context.Context, cmdable, nodeCmdable redisson.Cmdabl
 	return err
 }
 
+func isFullPattern(pattern string) bool {
+	pattern = strings.TrimSpace(pattern)
+	return pattern == "" || pattern == "*"
+}
+
+func (e *engine) flushAll(ctx context.Context, cmdable redisson.Cmdable) error {
+	log.Warn().Strs("addr", e.cc.GetAddrs()).Msg("flush all redis db")
+	return cmdable.FlushAll(ctx).Err()
+}
+
+func (e *engine) flushOnDB(ctx context.Context, db int) error {
+	if db == e.db {
+		log.Warn().Int("db", db).Strs("addr", e.cc.GetAddrs()).Msg("flush redis db")
+		return e.Cmdable.FlushDB(ctx).Err()
+	}
+	e.cc.ApplyOption(redisson.WithDB(db))
+	c, err := redisson.Connect(e.cc)
+	if err != nil {
+		log.Error().Int("db", db).Strs("addr", e.cc.GetAddrs()).Err(err).Msg("connect redis failed")
+		return err
+	}
+	defer func() { _ = c.Close() }()
+	log.Warn().Int("db", db).Strs("addr", e.cc.GetAddrs()).Msg("flush redis db")
+	return c.FlushDB(ctx).Err()
+}
+
 // databaseCount 获取实例配置的 db 总数
 func (e *engine) databaseCount(ctx context.Context) (int, error) {
 	res, err := e.ConfigGet(ctx, "databases").Result()
@@ -160,15 +186,28 @@ func (e *engine) clearOnDB(ctx context.Context, db int, pattern string, count in
 
 // Clear 清理
 func (e *engine) Clear(ctx context.Context, db int, pattern string, count int64) error {
-	xpanic.WhenTrue(len(pattern) == 0, "pattern is empty")
-	xpanic.WhenTrue(count <= 0, "count is invalid, need > 0")
+	fullPattern := isFullPattern(pattern)
+	if !fullPattern {
+		xpanic.WhenTrue(count <= 0, "count is invalid, need > 0")
+	}
 	if e.IsCluster() {
 		if db > 0 {
 			log.Warn().Int("db", db).Msg("cluster mode only supports db 0, ignore db flag")
 		}
+		if fullPattern {
+			return e.Cmdable.ForEachNodes(ctx, func(_ctx context.Context, _cmdable redisson.Cmdable) error {
+				return e.flushAll(_ctx, _cmdable)
+			})
+		}
 		return e.Cmdable.ForEachNodes(ctx, func(_ctx context.Context, _cmdable redisson.Cmdable) error {
 			return e.clear(_ctx, e.Cmdable, _cmdable, pattern, count)
 		})
+	}
+	if fullPattern {
+		if db == ClearAllDB {
+			return e.flushAll(ctx, e.Cmdable)
+		}
+		return e.flushOnDB(ctx, db)
 	}
 	var dbs []int
 	if db == ClearAllDB && !e.Cmdable.IsCluster() {
