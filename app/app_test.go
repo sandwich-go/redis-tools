@@ -1,6 +1,14 @@
 package app
 
-import "testing"
+import (
+	"context"
+	"sync/atomic"
+	"testing"
+
+	"github.com/alicebob/miniredis/v2"
+	"github.com/alicebob/miniredis/v2/server"
+	"github.com/sandwich-go/redisson"
+)
 
 func TestIsFullPattern(t *testing.T) {
 	tests := []struct {
@@ -22,5 +30,61 @@ func TestIsFullPattern(t *testing.T) {
 				t.Fatalf("isFullPattern(%q) = %v, want %v", tt.pattern, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestClearAllUsesScanWhenFlushCommandsAreDisabled(t *testing.T) {
+	redis := miniredis.RunT(t)
+	if err := redis.DB(0).Set("db0-key", "value"); err != nil {
+		t.Fatal(err)
+	}
+	if err := redis.DB(1).Set("db1-key", "value"); err != nil {
+		t.Fatal(err)
+	}
+
+	var flushCommandCount int32
+	redis.Server().SetPreHook(func(peer *server.Peer, command string, _ ...string) bool {
+		switch command {
+		case "INFO":
+			peer.Block(func(writer *server.Writer) {
+				writer.WriteBulk("# Server\r\nredis_version:7.0.0\r\n# Cluster\r\ncluster_enabled:0\r\n")
+			})
+			return true
+		case "ROLE":
+			peer.Block(func(writer *server.Writer) {
+				writer.WriteRaw("*3\r\n$6\r\nmaster\r\n:0\r\n*0\r\n")
+			})
+			return true
+		case "FLUSHALL", "FLUSHDB":
+			atomic.AddInt32(&flushCommandCount, 1)
+			peer.WriteError("command is disabled")
+			return true
+		default:
+			return false
+		}
+	})
+
+	engine, err := New(redisson.NewConf(
+		redisson.WithAddrs(redis.Addr()),
+		redisson.WithDB(0),
+	))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if closable, ok := engine.(interface{ Close() error }); ok {
+		defer func() { _ = closable.Close() }()
+	}
+
+	if err := engine.Clear(context.Background(), ClearAllDB, "*", 1); err != nil {
+		t.Fatalf("clear all redis db: %v", err)
+	}
+	if got := redis.DB(0).Keys(); len(got) != 0 {
+		t.Fatalf("db 0 keys = %v, want empty", got)
+	}
+	if got := redis.DB(1).Keys(); len(got) != 0 {
+		t.Fatalf("db 1 keys = %v, want empty", got)
+	}
+	if got := atomic.LoadInt32(&flushCommandCount); got != 0 {
+		t.Fatalf("flush command count = %d, want 0", got)
 	}
 }
