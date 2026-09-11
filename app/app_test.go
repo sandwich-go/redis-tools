@@ -33,7 +33,7 @@ func TestIsFullPattern(t *testing.T) {
 	}
 }
 
-func TestClearAllUsesScanWhenFlushCommandsAreDisabled(t *testing.T) {
+func TestClearAllFallsBackToScanWhenFlushCommandsAreDisabled(t *testing.T) {
 	redis := miniredis.RunT(t)
 	if err := redis.DB(0).Set("db0-key", "value"); err != nil {
 		t.Fatal(err)
@@ -84,7 +84,7 @@ func TestClearAllUsesScanWhenFlushCommandsAreDisabled(t *testing.T) {
 	if got := redis.DB(1).Keys(); len(got) != 0 {
 		t.Fatalf("db 1 keys = %v, want empty", got)
 	}
-	if got := atomic.LoadInt32(&flushCommandCount); got != 0 {
-		t.Fatalf("flush command count = %d, want 0", got)
+	if got := atomic.LoadInt32(&flushCommandCount); got != 1 {
+		t.Fatalf("flush command count = %d, want 1", got)
 	}
 }

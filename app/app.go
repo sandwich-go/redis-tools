@@ -19,7 +19,7 @@ type Engine interface {
 	// Clear 清理
 	// db 指定清理的 db，传入 ClearAllDB(-1) 表示清理所有 db；集群模式下该参数被忽略
 	// pattern 匹配模式；空串或 * 表示清理当前作用域内所有 key
-	// count 单次扫描匹配返回的最大元素数量，必须大于 0
+	// count 单次扫描匹配返回的最大元素数量，必须大于 0；全量清理回退到扫描时也会使用
 	Clear(ctx context.Context, db int, pattern string, count int64) error
 }
 
@@ -127,6 +127,27 @@ func isFullPattern(pattern string) bool {
 	return pattern == "" || pattern == "*"
 }
 
+func (e *engine) flushAll(ctx context.Context, cmdable redisson.Cmdable) error {
+	log.Warn().Strs("addr", e.cc.GetAddrs()).Msg("flush all redis db")
+	return cmdable.FlushAll(ctx).Err()
+}
+
+func (e *engine) flushOnDB(ctx context.Context, db int) error {
+	if db == e.db {
+		log.Warn().Int("db", db).Strs("addr", e.cc.GetAddrs()).Msg("flush redis db")
+		return e.Cmdable.FlushDB(ctx).Err()
+	}
+	e.cc.ApplyOption(redisson.WithDB(db))
+	c, err := redisson.Connect(e.cc)
+	if err != nil {
+		log.Error().Int("db", db).Strs("addr", e.cc.GetAddrs()).Err(err).Msg("connect redis failed")
+		return err
+	}
+	defer func() { _ = c.Close() }()
+	log.Warn().Int("db", db).Strs("addr", e.cc.GetAddrs()).Msg("flush redis db")
+	return c.FlushDB(ctx).Err()
+}
+
 // databaseCount 获取实例配置的 db 总数
 func (e *engine) databaseCount(ctx context.Context) (int, error) {
 	res, err := e.ConfigGet(ctx, "databases").Result()
@@ -166,7 +187,8 @@ func (e *engine) clearOnDB(ctx context.Context, db int, pattern string, count in
 // Clear 清理
 func (e *engine) Clear(ctx context.Context, db int, pattern string, count int64) error {
 	xpanic.WhenTrue(count <= 0, "count is invalid, need > 0")
-	if isFullPattern(pattern) {
+	fullPattern := isFullPattern(pattern)
+	if fullPattern {
 		pattern = "*"
 	}
 	if e.IsCluster() {
@@ -174,8 +196,27 @@ func (e *engine) Clear(ctx context.Context, db int, pattern string, count int64)
 			log.Warn().Int("db", db).Msg("cluster mode only supports db 0, ignore db flag")
 		}
 		return e.Cmdable.ForEachNodes(ctx, func(_ctx context.Context, _cmdable redisson.Cmdable) error {
+			if fullPattern {
+				if err := e.flushAll(_ctx, _cmdable); err == nil {
+					return nil
+				} else {
+					log.Warn().Err(err).Msg("flush all failed, fallback to scan")
+				}
+			}
 			return e.clear(_ctx, e.Cmdable, _cmdable, pattern, count)
 		})
+	}
+	if fullPattern {
+		var err error
+		if db == ClearAllDB {
+			err = e.flushAll(ctx, e.Cmdable)
+		} else {
+			err = e.flushOnDB(ctx, db)
+		}
+		if err == nil {
+			return nil
+		}
+		log.Warn().Err(err).Msg("flush failed, fallback to scan")
 	}
 	var dbs []int
 	if db == ClearAllDB {
