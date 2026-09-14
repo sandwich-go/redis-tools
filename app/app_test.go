@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"strings"
 	"sync/atomic"
 	"testing"
 
@@ -86,5 +87,25 @@ func TestClearAllFallsBackToScanWhenFlushCommandsAreDisabled(t *testing.T) {
 	}
 	if got := atomic.LoadInt32(&flushCommandCount); got != 1 {
 		t.Fatalf("flush command count = %d, want 1", got)
+	}
+}
+
+func TestForEachNodeConcurrentlyRecoversPanic(t *testing.T) {
+	e, err := New(redisson.NewConf(redisson.WithT(t)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if closable, ok := e.(interface{ Close() error }); ok {
+		defer func() { _ = closable.Close() }()
+	}
+
+	err = e.(*engine).forEachNodeConcurrently(context.Background(), func(context.Context, redisson.Cmdable) error {
+		panic("node failed")
+	})
+	if err == nil {
+		t.Fatal("forEachNodeConcurrently() error = nil, want panic error")
+	}
+	if got := err.Error(); !strings.Contains(got, "cluster node cleanup task panic recovered") || !strings.Contains(got, "node failed") {
+		t.Fatalf("forEachNodeConcurrently() error = %q, want panic details", got)
 	}
 }

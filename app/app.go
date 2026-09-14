@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/rs/zerolog/log"
 	"github.com/sandwich-go/boost/xerror"
@@ -127,6 +128,40 @@ func isFullPattern(pattern string) bool {
 	return pattern == "" || pattern == "*"
 }
 
+func (e *engine) forEachNodeConcurrently(ctx context.Context, fn func(context.Context, redisson.Cmdable) error) error {
+	var (
+		errs xerror.Array
+		mu   sync.Mutex
+		wg   sync.WaitGroup
+	)
+	pushErr := func(err error) {
+		if err == nil {
+			return
+		}
+		mu.Lock()
+		errs.Push(err)
+		mu.Unlock()
+	}
+	err := e.Cmdable.ForEachNodes(ctx, func(_ctx context.Context, _cmdable redisson.Cmdable) error {
+		wg.Add(1)
+		go func(nodeCtx context.Context, nodeCmdable redisson.Cmdable) {
+			defer func() {
+				if recovered := recover(); recovered != nil {
+					pushErr(fmt.Errorf("cluster node each node panic recovered: %v", recovered))
+				}
+				wg.Done()
+			}()
+			pushErr(fn(nodeCtx, nodeCmdable))
+		}(_ctx, _cmdable)
+		return nil
+	})
+	wg.Wait()
+	if err != nil {
+		pushErr(err)
+	}
+	return errs.Err()
+}
+
 func (e *engine) flushAll(ctx context.Context, cmdable redisson.Cmdable) error {
 	log.Warn().Strs("addr", e.cc.GetAddrs()).Msg("flush all redis db")
 	return cmdable.FlushAll(ctx).Err()
@@ -195,7 +230,7 @@ func (e *engine) Clear(ctx context.Context, db int, pattern string, count int64)
 		if db > 0 {
 			log.Warn().Int("db", db).Msg("cluster mode only supports db 0, ignore db flag")
 		}
-		return e.Cmdable.ForEachNodes(ctx, func(_ctx context.Context, _cmdable redisson.Cmdable) error {
+		return e.forEachNodeConcurrently(ctx, func(_ctx context.Context, _cmdable redisson.Cmdable) error {
 			if fullPattern {
 				if err := e.flushAll(_ctx, _cmdable); err == nil {
 					return nil
