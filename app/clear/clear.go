@@ -31,7 +31,7 @@ var (
 				// 未显式指定 --db 时，沿用配置文件中的 db
 				db = config.Get().GetDB()
 			}
-			initialize()
+			initialize(cmd.Context())
 		},
 		SilenceErrors: true,
 		SilenceUsage:  true,
@@ -46,8 +46,11 @@ func InitCommand(parent *cobra.Command) {
 	parent.AddCommand(rootCmd)
 }
 
-func initialize() {
+func initialize(ctx context.Context) {
 	e := app.MustNew(config.Get())
-	xpanic.WhenError(e.Clear(context.Background(), db, pattern, count))
+	if closer, ok := e.(interface{ Close() error }); ok {
+		defer func() { _ = closer.Close() }()
+	}
+	xpanic.WhenError(e.Clear(ctx, db, pattern, count))
 	log.Info().Msg("clear success")
 }

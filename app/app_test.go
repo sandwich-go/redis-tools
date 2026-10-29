@@ -99,7 +99,7 @@ func TestForEachNodeConcurrentlyRecoversPanic(t *testing.T) {
 		defer func() { _ = closable.Close() }()
 	}
 
-	err = e.(*engine).forEachNodeConcurrently(context.Background(), func(context.Context, redisson.Cmdable) error {
+	err = e.(*engine).forEachNodeConcurrently(context.Background(), e.(redisson.Cmdable), func(context.Context, redisson.Cmdable) error {
 		panic("node failed")
 	})
 	if err == nil {

@@ -20,22 +20,24 @@ type Engine interface {
 	// Clear 清理
 	// db 指定清理的 db，传入 ClearAllDB(-1) 表示清理所有 db；集群模式下该参数被忽略
 	// pattern 匹配模式；空串或 * 表示清理当前作用域内所有 key
-	// count 单次扫描匹配返回的最大元素数量，必须大于 0；全量清理回退到扫描时也会使用
+	// count 单次扫描的 COUNT 提示值，必须大于 0；全量清理回退到扫描时也会使用
+	// 集群下会重新发现节点并复查；无法确认清空时返回错误
 	Clear(ctx context.Context, db int, pattern string, count int64) error
 }
 
 type engine struct {
 	cc redisson.ConfInterface
 	redisson.Cmdable
-	db int // 主连接绑定的 db（配置 db），用于判断能否复用主连接
+	db      int // 主连接绑定的 db（配置 db），用于判断能否复用主连接
+	connect func(redisson.ConfInterface) (redisson.Cmdable, error)
 }
 
 // New 创建 Engine
 func New(cc redisson.ConfInterface) (Engine, error) {
 	var err error
 	cc.ApplyOption(redisson.WithDevelopment(false))
-	e := &engine{cc: cc, db: cc.GetDB()}
-	e.Cmdable, err = redisson.Connect(cc)
+	e := &engine{cc: cc, db: cc.GetDB(), connect: redisson.Connect}
+	e.Cmdable, err = e.connect(cc)
 	if err == nil {
 		log.Info().Any("config", e.Cmdable.Options().(*redisson.Conf)).Msg("connect redis")
 	} else {
@@ -56,52 +58,25 @@ func (e *engine) delete(ctx context.Context, cmdable, nodeCmdable redisson.Cmdab
 	if !e.IsCluster() {
 		return nodeCmdable.Del(ctx, keys...).Err()
 	}
-	// 先尝试
+	// 每条命令只删除一个 key，由集群客户端处理 MOVED / ASK 重定向。
+	// 失败时交给下一轮重新发现节点后重试，避免退回到可能已变更角色的节点。
 	batch := cmdable.Pipeline()
 	for _, key := range keys {
 		redisson.CommandDel.P(batch).Cmd(key)
 	}
-	_, err0 := batch.Exec(ctx)
-	if err0 == nil {
-		return nil
-	}
-
-	var moveKey []string
-	var err xerror.Array
-	for _, key := range keys {
-		err0 := nodeCmdable.Del(ctx, key).Err()
-		if err0 != nil {
-			if strings.Contains(err0.Error(), "MOVE") {
-				moveKey = append(moveKey, key)
-			} else {
-				err.Push(err0)
-			}
-		}
-	}
-	if err1 := err.Err(); err1 != nil {
-		return err1
-	}
-	if len(moveKey) > 0 {
-		log.Warn().Strs("moveKey", moveKey).Msg("have move keys...")
-		batch = cmdable.Pipeline()
-		for _, key := range moveKey {
-			redisson.CommandDel.P(batch).Cmd(key)
-		}
-		_, err0 := batch.Exec(ctx)
-		if err0 != nil {
-			err.Push(err0)
-		}
-		return err.Err()
-	}
-	return nil
+	_, err := batch.Exec(ctx)
+	return err
 }
 
 // clear 清理
-func (e *engine) clear(ctx context.Context, cmdable, nodeCmdable redisson.Cmdable, pattern string, count int64) error {
+func (e *engine) clear(ctx context.Context, cmdable, nodeCmdable redisson.Cmdable, pattern string, count int64) (int64, error) {
 	var err error
 	var cursor uint64
 	var total int64
 	for {
+		if err = ctx.Err(); err != nil {
+			break
+		}
 		var keys []string
 		keys, cursor, err = nodeCmdable.Scan(ctx, cursor, pattern, count).Result()
 		if err != nil {
@@ -120,7 +95,7 @@ func (e *engine) clear(ctx context.Context, cmdable, nodeCmdable redisson.Cmdabl
 			break
 		}
 	}
-	return err
+	return total, err
 }
 
 func isFullPattern(pattern string) bool {
@@ -128,7 +103,7 @@ func isFullPattern(pattern string) bool {
 	return pattern == "" || pattern == "*"
 }
 
-func (e *engine) forEachNodeConcurrently(ctx context.Context, fn func(context.Context, redisson.Cmdable) error) error {
+func (e *engine) forEachNodeConcurrently(ctx context.Context, client redisson.Cmdable, fn func(context.Context, redisson.Cmdable) error) error {
 	var (
 		errs xerror.Array
 		mu   sync.Mutex
@@ -142,12 +117,12 @@ func (e *engine) forEachNodeConcurrently(ctx context.Context, fn func(context.Co
 		errs.Push(err)
 		mu.Unlock()
 	}
-	err := e.Cmdable.ForEachNodes(ctx, func(_ctx context.Context, _cmdable redisson.Cmdable) error {
+	err := client.ForEachNodes(ctx, func(_ctx context.Context, _cmdable redisson.Cmdable) error {
 		wg.Add(1)
 		go func(nodeCtx context.Context, nodeCmdable redisson.Cmdable) {
 			defer func() {
 				if recovered := recover(); recovered != nil {
-					pushErr(fmt.Errorf("cluster node each node panic recovered: %v", recovered))
+					pushErr(fmt.Errorf("cluster node cleanup task panic recovered: %v", recovered))
 				}
 				wg.Done()
 			}()
@@ -206,7 +181,8 @@ func (e *engine) clearOnDB(ctx context.Context, db int, pattern string, count in
 	// 目标 db 即主连接所在 db，复用主连接，与未指定 db 时行为完全一致
 	if db == e.db {
 		log.Info().Int("db", db).Strs("addr", e.cc.GetAddrs()).Msg("start clear db")
-		return e.clear(ctx, e.Cmdable, e.Cmdable, pattern, count)
+		_, err := e.clear(ctx, e.Cmdable, e.Cmdable, pattern, count)
+		return err
 	}
 	e.cc.ApplyOption(redisson.WithDB(db))
 	c, err := redisson.Connect(e.cc)
@@ -216,12 +192,16 @@ func (e *engine) clearOnDB(ctx context.Context, db int, pattern string, count in
 	}
 	defer func() { _ = c.Close() }()
 	log.Info().Int("db", db).Strs("addr", e.cc.GetAddrs()).Msg("start clear db")
-	return e.clear(ctx, c, c, pattern, count)
+	_, err = e.clear(ctx, c, c, pattern, count)
+	return err
 }
 
 // Clear 清理
 func (e *engine) Clear(ctx context.Context, db int, pattern string, count int64) error {
 	xpanic.WhenTrue(count <= 0, "count is invalid, need > 0")
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	fullPattern := isFullPattern(pattern)
 	if fullPattern {
 		pattern = "*"
@@ -230,16 +210,7 @@ func (e *engine) Clear(ctx context.Context, db int, pattern string, count int64)
 		if db > 0 {
 			log.Warn().Int("db", db).Msg("cluster mode only supports db 0, ignore db flag")
 		}
-		return e.forEachNodeConcurrently(ctx, func(_ctx context.Context, _cmdable redisson.Cmdable) error {
-			if fullPattern {
-				if err := e.flushAll(_ctx, _cmdable); err == nil {
-					return nil
-				} else {
-					log.Warn().Err(err).Msg("flush all failed, fallback to scan")
-				}
-			}
-			return e.clear(_ctx, e.Cmdable, _cmdable, pattern, count)
-		})
+		return e.clearCluster(ctx, pattern, count, fullPattern)
 	}
 	if fullPattern {
 		var err error
